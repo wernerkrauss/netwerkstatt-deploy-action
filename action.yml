@@ -1,0 +1,112 @@
+name: 'netwerkstatt Deploy'
+description: 'Composer-Install & Tests, optional Frontend-Build (Silverstripe Theme) und Deployer-Deploy per SSH, mit Discord/Signal-Alerts'
+author: 'netwerkstatt'
+
+inputs:
+  php-version:
+    description: 'PHP-Version für Setup & Tests'
+    required: false
+    default: '8.3'
+  node-version:
+    description: 'Node-Version für den Frontend-Build'
+    required: false
+    default: '22'
+  stage:
+    description: 'Deployer-Stage (z. B. production oder staging)'
+    required: true
+  dep-task:
+    description: 'Deployer-Task, der ausgeführt wird'
+    required: false
+    default: 'deploy'
+  run-tests:
+    description: '"true" = composer install + phpunit werden ausgeführt'
+    required: false
+    default: 'true'
+  build-frontend:
+    description: '"true" = npm ci && npm run build im theme-path'
+    required: false
+    default: 'true'
+  theme-path:
+    description: 'Pfad zum Theme mit package.json (relativ zum Repo-Root)'
+    required: false
+    default: 'themes/site'
+  deploy-key:
+    description: 'Privater SSH-Key für den Zielserver (Secret via with übergeben)'
+    required: false
+    default: ''
+  discord-webhook:
+    description: 'Discord-Webhook für Deploy-Alerts (optional)'
+    required: false
+    default: ''
+  callmebot-url:
+    description: 'CallMeBot-URL für Signal-Alerts (optional, inkl. apikey-Parametern)'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup PHP
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: ${{ inputs.php-version }}
+        extensions: mbstring, intl
+
+    - name: Install dependencies
+      shell: bash
+      run: composer install --prefer-dist --no-interaction --no-progress
+
+    - name: Download Deployer
+      shell: bash
+      run: |
+        curl -sSL https://deployer.org/deployer.phar -o deployer.phar
+        chmod +x deployer.phar
+
+    - name: Run tests
+      if: inputs.run-tests == 'true'
+      shell: bash
+      run: |
+        if [ -f vendor/bin/phpunit ]; then vendor/bin/phpunit; else echo "phpunit nicht gefunden – überspringe Tests"; fi
+
+    - name: Setup Node
+      if: inputs.build-frontend == 'true'
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: npm
+        cache-dependency-path: ${{ inputs.theme-path }}/package-lock.json
+
+    - name: Build frontend
+      if: inputs.build-frontend == 'true'
+      shell: bash
+      run: |
+        cd "${{ inputs.theme-path }}"
+        npm ci
+        npm run build
+
+    - name: Deploy
+      shell: bash
+      env:
+        DEPLOY_KEY: ${{ inputs.deploy-key }}
+      run: |
+        mkdir -p ~/.ssh
+        if [ -n "$DEPLOY_KEY" ]; then
+          echo "$DEPLOY_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+        fi
+        ./deployer.phar ${{ inputs.dep-task }} ${{ inputs.stage }} -vvv
+
+    - name: Notify Discord
+      if: always() && inputs.discord-webhook != ''
+      uses: sarisia/actions-status-discord@v1
+      with:
+        webhook: ${{ inputs.discord-webhook }}
+        title: "Deploy ${{ inputs.stage }} – ${{ github.repository }}"
+
+    - name: Notify Signal (CallMeBot)
+      if: always() && inputs.callmebot-url != ''
+      shell: bash
+      run: |
+        if [ "${{ job.status }}" == "success" ]; then st="✅%20erfolgreich"; else st="❌%20fehlgeschlagen"; fi
+        msg="Deploy%20${{ inputs.stage }}%20${{ github.repository }}:%20$st"
+        curl -s "${{ inputs.callmebot-url }}&msg=$msg" > /dev/null || true

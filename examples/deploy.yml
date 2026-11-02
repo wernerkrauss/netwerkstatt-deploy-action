@@ -1,0 +1,28 @@
+# Beispiel-Workflow für ein Kundenprojekt
+# Kopiere diese Datei ins Projekt als .github/workflows/deploy.yml
+
+name: deploy
+
+on:
+  push:
+    branches: [master, main]
+
+concurrency: production_environment
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: wernerkrauss/netwerkstatt-deploy-action@v1
+        with:
+          stage: production
+          # php-version: '8.3'
+          # dep-task: deploy
+          # run-tests: 'true'
+          # build-frontend: 'true'
+          theme-path: app/themes/kundentheme
+          deploy-key: ${{ secrets.DEPLOY_SSH_KEY }}
+          discord-webhook: ${{ secrets.DISCORD_DEPLOY_WEBHOOK }}
+          # callmebot-url: ${{ secrets.CALLMEBOT_URL }}
