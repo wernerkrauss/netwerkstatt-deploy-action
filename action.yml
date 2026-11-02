@@ -52,22 +52,26 @@ runs:
         php-version: ${{ inputs.php-version }}
         extensions: mbstring, intl
 
+    # Install composer dependencies (needed for tests and deployment tooling)
     - name: Install dependencies
       shell: bash
       run: composer install --prefer-dist --no-interaction --no-progress
 
+    # Download Deployer as a phar so we always run the latest 8.x version
     - name: Download Deployer
       shell: bash
       run: |
         curl -sSL https://deployer.org/deployer.phar -o deployer.phar
         chmod +x deployer.phar
 
+    # Run tests if phpunit is available; skip silently otherwise
     - name: Run tests
       if: inputs.run-tests == 'true'
       shell: bash
       run: |
-        if [ -f vendor/bin/phpunit ]; then vendor/bin/phpunit; else echo "phpunit nicht gefunden – überspringe Tests"; fi
+        if [ -f vendor/bin/phpunit ]; then vendor/bin/phpunit; else echo "phpunit not found - skipping tests"; fi
 
+    # Set up Node with npm cache for the theme build
     - name: Setup Node
       if: inputs.build-frontend == 'true'
       uses: actions/setup-node@v4
@@ -76,6 +80,7 @@ runs:
         cache: npm
         cache-dependency-path: ${{ inputs.theme-path }}/package-lock.json
 
+    # Build the frontend assets inside the theme directory
     - name: Build frontend
       if: inputs.build-frontend == 'true'
       shell: bash
@@ -84,6 +89,7 @@ runs:
         npm ci
         npm run build
 
+    # Install the deploy key and run the Deployer task
     - name: Deploy
       shell: bash
       env:
@@ -96,6 +102,7 @@ runs:
         fi
         ./deployer.phar ${{ inputs.dep-task }} ${{ inputs.stage }} -vvv
 
+    # Notify on both success and failure (if: always())
     - name: Notify Discord
       if: always() && inputs.discord-webhook != ''
       uses: sarisia/actions-status-discord@v1
@@ -107,6 +114,6 @@ runs:
       if: always() && inputs.callmebot-url != ''
       shell: bash
       run: |
-        if [ "${{ job.status }}" == "success" ]; then st="✅%20erfolgreich"; else st="❌%20fehlgeschlagen"; fi
+        if [ "${{ job.status }}" == "success" ]; then st="✅%20success"; else st="❌%20failed"; fi
         msg="Deploy%20${{ inputs.stage }}%20${{ github.repository }}:%20$st"
         curl -s "${{ inputs.callmebot-url }}&msg=$msg" > /dev/null || true

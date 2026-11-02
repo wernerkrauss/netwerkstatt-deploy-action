@@ -1,5 +1,5 @@
-# Beispiel-Workflow für ein Kundenprojekt
-# Kopiere diese Datei ins Projekt als .github/workflows/deploy.yml
+# Example workflow for a client project.
+# Copy this file into the project as .github/workflows/deploy.yml
 
 name: deploy
 
@@ -7,6 +7,7 @@ on:
   push:
     branches: [master, main]
 
+# Prevent concurrent deployments to the same server
 concurrency: production_environment
 
 jobs:
