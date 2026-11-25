@@ -103,6 +103,9 @@ optional `DEPLOY_PORT` and `DEPLOY_COMPOSER_COMMAND`, and the secrets `DEPLOYER_
 - `v0.1` — legacy composite action (`action.yml`).
 - `v1.0.0` — reusable CI and archive-based deploy workflows under `.github/workflows/`.
 - `v1.1.0` — adds `reusable-silverstripe-vite-deploy.yml` (CI-built Vite frontend merged into the release).
+- `v1.2.0` — action dependency updates: `actions/checkout@v7`, `actions/setup-node@v7`,
+  `actions/upload-artifact@v7`, `actions/download-artifact@v8`, `ramsey/composer-install@4.0.0`.
+  `shivammathur/setup-php@v2` and `deployphp/action` v1.0.26 (SHA-pinned) are already current.
   Breaking changes get a new major tag; projects bump their pin deliberately.
 
 ## Important notes

@@ -59,7 +59,7 @@ jobs:
       php_version: ${{ steps.runtime.outputs.php_version }}
     steps:
       - name: Check out the triggering commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Read PHP version from DDEV config
         id: runtime
@@ -79,7 +79,7 @@ jobs:
 
       - name: Download frontend build from CI
         if: inputs.should_deploy
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.frontend_artifact_name }}
           path: build-artifact/frontend
@@ -117,7 +117,7 @@ jobs:
 
       - name: Upload the release artifact
         if: inputs.should_deploy
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.artifact_name }}
           path: build-artifact/release.tar.gz
@@ -144,10 +144,10 @@ jobs:
       DEPLOY_ARCHIVE: ${{ github.workspace }}/build-artifact/release.tar.gz
     steps:
       - name: Check out the deployment recipe
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download the release artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: ${{ inputs.artifact_name }}
           path: build-artifact
