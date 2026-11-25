@@ -1,0 +1,168 @@
+name: Reusable Silverstripe deployment
+
+on:
+  workflow_call:
+    inputs:
+      should_deploy:
+        description: Build and deploy the release artifact.
+        required: false
+        type: boolean
+        default: false
+      php_version:
+        description: Optional PHP version override. Defaults to php_version in .ddev/config.yaml.
+        required: false
+        type: string
+        default: ''
+      ddev_directory:
+        description: Directory containing the DDEV project configuration used to select the runtime version.
+        required: false
+        type: string
+        default: .
+      deployment_environment:
+        description: GitHub Environment holding the target variables and deployment secrets.
+        required: false
+        type: string
+        default: production
+      deploy_stage:
+        description: Deployer host stage name.
+        required: false
+        type: string
+        default: live
+      deployer_version:
+        description: Deployer PHAR version used by deployphp/action.
+        required: false
+        type: string
+        default: '8.0.5'
+      artifact_name:
+        description: Name of the packaged release artifact.
+        required: false
+        type: string
+        default: silverstripe-release
+    secrets:
+      DEPLOYER_PRIVATE_KEY:
+        required: false
+      DEPLOYER_KNOWN_HOSTS:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-package:
+    runs-on: ubuntu-latest
+    outputs:
+      php_version: ${{ steps.runtime.outputs.php_version }}
+    steps:
+      - name: Check out the triggering commit
+        uses: actions/checkout@v4
+
+      - name: Read PHP version from DDEV config
+        id: runtime
+        env:
+          DDEV_DIRECTORY: ${{ inputs.ddev_directory }}
+          PHP_VERSION_OVERRIDE: ${{ inputs.php_version }}
+        run: |
+          ruby -r yaml -e '
+            version = ENV.fetch("PHP_VERSION_OVERRIDE")
+            if version.empty?
+              config_path = File.join(ENV.fetch("DDEV_DIRECTORY"), ".ddev/config.yaml")
+              abort "Set php_version or provide #{config_path}." unless File.file?(config_path)
+              config = YAML.safe_load_file(config_path)
+              version = config.fetch("php_version").to_s
+            end
+
+            abort "Unsupported PHP version: #{version}" unless version.match?(/\A\d+\.\d+\z/)
+            File.open(ENV.fetch("GITHUB_OUTPUT"), "a") { |output| output.puts "php_version=#{version}" }
+          '
+
+      - name: Package the release
+        if: inputs.should_deploy
+        env:
+          DDEV_DIRECTORY: ${{ inputs.ddev_directory }}
+        run: |
+          if [[ "$DDEV_DIRECTORY" == /* || "$DDEV_DIRECTORY" == *..* ]]; then
+            echo "DDEV directory must be a relative path without parent traversal." >&2
+            exit 1
+          fi
+
+          mkdir -p build-artifact/package
+          git archive --format=tar "$GITHUB_SHA" | tar -xf - -C build-artifact/package
+          tar -czf build-artifact/release.tar.gz -C build-artifact/package .
+
+      - name: Upload the release artifact
+        if: inputs.should_deploy
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: build-artifact/release.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  deploy:
+    if: inputs.should_deploy
+    needs: build-and-package
+    runs-on: ubuntu-latest
+    environment:
+      name: ${{ inputs.deployment_environment }}
+    concurrency:
+      group: deploy-${{ github.repository }}-${{ inputs.deployment_environment }}
+      cancel-in-progress: false
+    env:
+      DEPLOY_STAGE: ${{ inputs.deploy_stage }}
+      DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ vars.DEPLOY_USER }}
+      DEPLOY_PORT: ${{ vars.DEPLOY_PORT || '22' }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+      DEPLOY_PHP_BIN: ${{ vars.DEPLOY_PHP_BIN }}
+      DEPLOY_COMPOSER_COMMAND: ${{ vars.DEPLOY_COMPOSER_COMMAND }}
+      DEPLOY_ARCHIVE: ${{ github.workspace }}/build-artifact/release.tar.gz
+    steps:
+      - name: Check out the deployment recipe
+        uses: actions/checkout@v4
+
+      - name: Download the release artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: build-artifact
+
+      - name: Set up PHP for Deployer
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ needs.build-and-package.outputs.php_version }}
+          tools: none
+
+      - name: Verify PHP version matches DDEV config
+        env:
+          EXPECTED_PHP_VERSION: ${{ needs.build-and-package.outputs.php_version }}
+        run: |
+          actual_php_version="$(php -r 'echo PHP_MAJOR_VERSION, ".", PHP_MINOR_VERSION;')"
+          if [[ "$actual_php_version" != "$EXPECTED_PHP_VERSION" ]]; then
+            echo "PHP mismatch: DDEV requests $EXPECTED_PHP_VERSION, runner has $actual_php_version" >&2
+            exit 1
+          fi
+          php --version
+
+      - name: Check deployment configuration
+        env:
+          DEPLOYER_PRIVATE_KEY: ${{ secrets.DEPLOYER_PRIVATE_KEY }}
+          DEPLOYER_KNOWN_HOSTS: ${{ secrets.DEPLOYER_KNOWN_HOSTS }}
+        run: |
+          for name in DEPLOY_HOST DEPLOY_USER DEPLOY_PATH DEPLOY_PHP_BIN DEPLOYER_PRIVATE_KEY DEPLOYER_KNOWN_HOSTS; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "Required GitHub Environment variable or secret is missing: $name" >&2
+              exit 1
+            fi
+          done
+          test -s "$DEPLOY_ARCHIVE"
+
+      - name: Deploy with Deployer
+        uses: deployphp/action@a1b46c204dbde25a32ed0d7bb6751ac3377ca1e9 # v1.0.26
+        with:
+          dep: deploy
+          recipe: deploy.php
+          deployer-version: ${{ inputs.deployer_version }}
+          php-binary: php
+          private-key: ${{ secrets.DEPLOYER_PRIVATE_KEY }}
+          known-hosts: ${{ secrets.DEPLOYER_KNOWN_HOSTS }}
+          verbosity: -vvv

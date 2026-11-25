@@ -1,0 +1,184 @@
+name: Reusable Silverstripe CI
+
+on:
+  workflow_call:
+    inputs:
+      php_version:
+        description: Optional PHP version override. Defaults to php_version in .ddev/config.yaml.
+        required: false
+        type: string
+        default: ''
+      ddev_directory:
+        description: Directory containing .ddev/config.yaml, relative to the repository root.
+        required: false
+        type: string
+        default: .
+      php_extensions:
+        description: Comma-separated PHP extensions required by Composer.
+        required: false
+        type: string
+        default: 'ctype, curl, dom, fileinfo, gd, intl, mbstring, mysqli, pdo_mysql, xml, zip'
+      database_image:
+        description: MySQL-compatible database service image.
+        required: false
+        type: string
+        default: mysql:8.0
+      theme_directory:
+        description: Optional theme directory containing package.json and yarn.lock. When set, the frontend build runs and is validated in CI.
+        required: false
+        type: string
+        default: ''
+      frontend_artifact_name:
+        description: Artifact name for the optional frontend build.
+        required: false
+        type: string
+        default: silverstripe-dist
+      run_phpunit:
+        description: Run PHPUnit; requires phpunit.xml or phpunit.xml.dist and existing tests.
+        required: false
+        type: boolean
+        default: false
+      node_version:
+        description: Node.js version used for the optional frontend build.
+        required: false
+        type: string
+        default: '20'
+      run_phpcs:
+        description: Run vendor/bin/phpcs.
+        required: false
+        type: boolean
+        default: false
+      run_phpstan:
+        description: Run vendor/bin/phpstan analyse.
+        required: false
+        type: boolean
+        default: false
+      run_rector:
+        description: Run vendor/bin/rector process --dry-run.
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: ${{ inputs.database_image }}
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: ss_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -proot"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      SS_DATABASE_SERVER: 127.0.0.1
+      SS_DATABASE_NAME: ss_test
+      SS_DATABASE_USERNAME: root
+      SS_DATABASE_PASSWORD: root
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Read PHP version from DDEV config
+        id: runtime
+        env:
+          DDEV_DIRECTORY: ${{ inputs.ddev_directory }}
+          PHP_VERSION_OVERRIDE: ${{ inputs.php_version }}
+        run: |
+          ruby -r yaml -e '
+            version = ENV.fetch("PHP_VERSION_OVERRIDE")
+            if version.empty?
+              config_path = File.join(ENV.fetch("DDEV_DIRECTORY"), ".ddev/config.yaml")
+              abort "Set php_version or provide #{config_path}." unless File.file?(config_path)
+              config = YAML.safe_load_file(config_path)
+              version = config.fetch("php_version").to_s
+            end
+
+            abort "Unsupported PHP version: #{version}" unless version.match?(/\A\d+\.\d+\z/)
+            File.open(ENV.fetch("GITHUB_OUTPUT"), "a") { |output| output.puts "php_version=#{version}" }
+          '
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ steps.runtime.outputs.php_version }}
+          extensions: ${{ inputs.php_extensions }}
+          coverage: none
+          tools: composer:v2
+
+      - name: Validate Composer configuration
+        run: composer validate --no-check-publish --quiet
+
+      - name: Install Composer dependencies
+        uses: ramsey/composer-install@v3
+        with:
+          composer-options: --prefer-dist --no-interaction
+
+      - name: Build Silverstripe database
+        if: inputs.run_phpunit
+        run: vendor/bin/sake db:build --flush
+
+      - name: Set up Node.js
+        if: inputs.theme_directory != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: yarn
+          cache-dependency-path: ${{ inputs.theme_directory }}/yarn.lock
+
+      - name: Enable the Yarn version pinned in package.json
+        if: inputs.theme_directory != ''
+        run: corepack enable
+
+      - name: Install frontend dependencies
+        if: inputs.theme_directory != ''
+        working-directory: ${{ inputs.theme_directory }}
+        run: yarn install --frozen-lockfile --non-interactive
+
+      - name: Build frontend assets
+        if: inputs.theme_directory != ''
+        working-directory: ${{ inputs.theme_directory }}
+        run: yarn build
+
+      - name: Check PHPUnit configuration
+        if: inputs.run_phpunit
+        run: |
+          if [[ ! -f phpunit.xml && ! -f phpunit.xml.dist ]]; then
+            echo "PHPUnit is enabled but phpunit.xml or phpunit.xml.dist is missing." >&2
+            echo "Add a Silverstripe test configuration, or set run_phpunit: false if this project has no tests." >&2
+            exit 1
+          fi
+
+      - name: Run PHPUnit
+        if: inputs.run_phpunit
+        run: vendor/bin/phpunit
+
+      - name: Run PHP_CodeSniffer
+        if: inputs.run_phpcs
+        run: vendor/bin/phpcs
+
+      - name: Run PHPStan
+        if: inputs.run_phpstan
+        run: vendor/bin/phpstan analyse --no-progress
+
+      - name: Run Rector dry run
+        if: inputs.run_rector
+        run: vendor/bin/rector process --dry-run --no-progress-bar
+
+      - name: Upload frontend build
+        if: inputs.theme_directory != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.frontend_artifact_name }}
+          path: ${{ inputs.theme_directory }}/dist
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1

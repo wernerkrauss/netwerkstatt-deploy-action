@@ -1,66 +1,109 @@
-# netwerkstatt-deploy-action
+# networkstatt-deploy-action
 
-Reusable GitHub Action for Silverstripe/PHP projects:
-composer install, tests, optional frontend build (theme with its own `package.json`)
-and deployment via [Deployer](https://deployer.org) over SSH – including alerts to
-Discord and Signal (via [CallMeBot](https://www.callmebot.com/blog/free-api-signal/)).
+Central home for the netwerkstatt deployment pipeline for Silverstripe projects.
 
-## Usage
+- **Reusable workflows (recommended):** `.github/workflows/reusable-silverstripe-ci.yml` and
+  `.github/workflows/reusable-silverstripe-deploy.yml` — CI plus a Deployer-based release deploy where the
+  runner packages a `git archive` of the commit, uploads it, and Deployer installs it on the server over SSH.
+  Targets, credentials, and secrets come from the calling repository's GitHub Environment, never from this repo.
+- **Legacy composite action (`action.yml`, tag `v0.1`):** the older single-action variant (composer install,
+  tests, optional npm frontend build, Deployer deploy from a server-side clone, Discord/Signal alerts).
+  Kept for reference; new projects should use the reusable workflows.
 
-Create `.github/workflows/deploy.yml` in your project:
+## Reusable workflows usage
+
+Create `.github/workflows/deploy.yml` in your project and call the workflows from this repository, pinned to a
+release tag or commit SHA:
 
 ```yaml
-name: deploy
-on:
-  push:
-    branches: [master, main]
+name: Build and deployment
 
-concurrency: production_environment   # prevents concurrent deploys
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: wernerkrauss/netwerkstatt-deploy-action@v0.1
-        with:
-          stage: production
-          theme-path: app/themes/customertheme
-          deploy-key: ${{ secrets.DEPLOY_SSH_KEY }}
-          discord-webhook: ${{ secrets.DISCORD_DEPLOY_WEBHOOK }}
-          callmebot-url: ${{ secrets.CALLMEBOT_URL }}
+  ci:
+    uses: wernerkrauss/netwerkstatt-deploy-action/.github/workflows/reusable-silverstripe-ci.yml@v1.0.0
+    with:
+      database_image: mariadb:10.4
+      run_phpunit: true
+      run_phpcs: true
+      run_phpstan: true
+      run_rector: true
+
+  silverstripe:
+    if: github.event_name != 'pull_request'
+    needs: ci
+    uses: wernerkrauss/netwerkstatt-deploy-action/.github/workflows/reusable-silverstripe-deploy.yml@v1.0.0
+    with:
+      should_deploy: >-
+        ${{ github.ref == 'refs/heads/main' && vars.DEPLOY_PRODUCTION_ENABLED == 'true' }}
+      deployment_environment: production
+      deploy_stage: live
+      deployer_version: '8.0.5'
+    secrets: inherit
 ```
 
-## Inputs
+Rules of thumb:
+
+- Always pin to a tag or commit SHA (never a moving branch). Prefer a SHA pin for maximum tamper resistance.
+- `secrets: inherit` passes the caller's secrets to the called workflow — only call this repository from
+  trusted, pinned refs, and consider making this repository private.
+- A reusable workflow cannot call another reusable workflow, so call both directly from the project's
+  `deploy.yml`.
+- The called workflows check out the **calling** repository; `vars.*` and Environment secrets resolve in the
+  caller's context, so each project keeps its own `DEPLOY_*` values.
+- The project still needs its own `deploy.php` (Deployer recipe reading the `DEPLOY_*` environment variables)
+  and a `docs/deployment.md` documenting its GitHub Environment variables and secrets.
+
+### CI inputs (`reusable-silverstripe-ci.yml`)
 
 | Input | Default | Description |
 |---|---|---|
-| `stage` | – (required) | Deployer stage, e.g. `production`, `staging` |
-| `dep-task` | `deploy` | Deployer task to run |
-| `php-version` | `8.3` | PHP version for setup and tests |
-| `node-version` | `22` | Node version for the frontend build |
-| `run-tests` | `true` | Runs `vendor/bin/phpunit` if present |
-| `build-frontend` | `true` | Runs `npm ci && npm run build` in the theme |
-| `theme-path` | `themes/site` | Path to the theme (relative to the repo root) |
-| `deploy-key` | – | Private SSH key (secret) |
-| `discord-webhook` | – | Discord webhook for deploy alerts |
-| `callmebot-url` | – | CallMeBot URL including API key for Signal alerts |
+| `php_version` | `''` | Override when `.ddev/config.yaml` is stale; otherwise read from there |
+| `ddev_directory` | `.` | Directory containing `.ddev/config.yaml` |
+| `database_image` | `mysql:8.0` | DB service image; use `mariadb:10.4`/`10.11` to match DDEV |
+| `theme_directory` | `''` | When set, runs `yarn install --frozen-lockfile` + `yarn build` (validation when dist is committed) |
+| `run_phpunit` / `run_phpcs` / `run_phpstan` / `run_rector` | `false` | Enable only when the project has tests/tool configs; DB build runs only with `run_phpunit` |
+| `node_version` | `'20'` | Node version for the optional frontend build |
+
+### Deploy inputs (`reusable-silverstripe-deploy.yml`)
+
+| Input | Default | Description |
+|---|---|---|
+| `should_deploy` | `false` | Boolean expression gating build + deploy |
+| `php_version` | `''` | Same override semantics as CI |
+| `deployment_environment` | `production` | GitHub Environment name |
+| `deploy_stage` | `live` | Deployer stage (`DEPLOY_STAGE`) |
+| `deployer_version` | `'8.0.5'` | v8 required for Silverstripe 6 (`vendor/bin/sake`) |
+| `artifact_name` | `silverstripe-release` | Name of the uploaded `release.tar.gz` |
+
+### Required GitHub configuration in the calling project
+
+Repository variable `DEPLOY_PRODUCTION_ENABLED=true` (only once the target is ready), plus in the
+`production` Environment the variables `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_PATH`, `DEPLOY_PHP_BIN`,
+optional `DEPLOY_PORT` and `DEPLOY_COMPOSER_COMMAND`, and the secrets `DEPLOYER_PRIVATE_KEY` and
+`DEPLOYER_KNOWN_HOSTS` (verify the host key fingerprint out of band; strict host checking stays on).
 
 ## Versioning
 
-Until the action is battle-tested, reference the `v0.1` tag.
-Once validated in real projects, tag `v1` and point projects at `@v1`.
+- `v0.1` — legacy composite action (`action.yml`).
+- `v1.0.0` — reusable workflows under `.github/workflows/`. Breaking changes get a new major tag; projects
+  bump their pin deliberately.
 
 ## Important notes
 
-- **Frontend build in CI:** The build runs on the GitHub runner. For the built
-  assets to arrive on the server, Deployer must **upload the code from CI**
-  instead of running `git clone` on the server – use the `deploy:upload`
-  recipe or upload the assets during the deploy process.
-- **Build on the server (alternative):** Put `node_modules` into the shared
-  directory so it exists only once across all releases:
-  `add('shared_dirs', ['node_modules']);`
-- **Secrets:** Store the SSH key, Discord webhook and CallMeBot URL as
-  repository or organization secrets – never commit them.
-- `concurrency: production_environment` in the workflow prevents concurrent
-  deploys to the same server.
+- When the frontend `dist` is committed to git, no frontend build is needed for deployment; the release
+  archive already contains it. A CI build can still validate that it compiles.
+- `.env` is gitignored and must be a Deployer `shared_files` entry in the project's `deploy.php`; before the
+  first archive-based deploy, copy the existing `.env` to `<DEPLOY_PATH>/shared/.env`.
+- The web server document root must resolve to `<DEPLOY_PATH>/current/public`; the target needs SSH access,
+  `rsync`, `tar`, a matching PHP CLI, and Composer.
+- Never commit SSH keys, webhooks, or API keys — use repository/Environment secrets only.
