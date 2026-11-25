@@ -2,9 +2,15 @@
 
 Central home for the netwerkstatt deployment pipeline for Silverstripe projects.
 
-- **Reusable workflows (recommended):** `.github/workflows/reusable-silverstripe-ci.yml` and
-  `.github/workflows/reusable-silverstripe-deploy.yml` — CI plus a Deployer-based release deploy where the
-  runner packages a `git archive` of the commit, uploads it, and Deployer installs it on the server over SSH.
+- **Reusable workflows (recommended):**
+  - `.github/workflows/reusable-silverstripe-ci.yml` — CI: Composer validate/install, optional tests, linting,
+    and frontend build (validation or artifact upload).
+  - `.github/workflows/reusable-silverstripe-deploy.yml` — release deploy for projects whose frontend `dist` is
+    committed to git: the runner packages a `git archive` of the commit, uploads it, and Deployer installs it
+    on the server over SSH.
+  - `.github/workflows/reusable-silverstripe-vite-deploy.yml` — release deploy for Vite-themed projects whose
+    `dist` is built in CI: the CI uploads the Vite output as an artifact, the deploy job merges it into the
+    release archive before uploading.
   Targets, credentials, and secrets come from the calling repository's GitHub Environment, never from this repo.
 - **Legacy composite action (`action.yml`, tag `v0.1`):** the older single-action variant (composer install,
   tests, optional npm frontend build, Deployer deploy from a server-side clone, Discord/Signal alerts).
@@ -95,8 +101,9 @@ optional `DEPLOY_PORT` and `DEPLOY_COMPOSER_COMMAND`, and the secrets `DEPLOYER_
 ## Versioning
 
 - `v0.1` — legacy composite action (`action.yml`).
-- `v1.0.0` — reusable workflows under `.github/workflows/`. Breaking changes get a new major tag; projects
-  bump their pin deliberately.
+- `v1.0.0` — reusable CI and archive-based deploy workflows under `.github/workflows/`.
+- `v1.1.0` — adds `reusable-silverstripe-vite-deploy.yml` (CI-built Vite frontend merged into the release).
+  Breaking changes get a new major tag; projects bump their pin deliberately.
 
 ## Important notes
 
