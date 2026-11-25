@@ -1,0 +1,29 @@
+name: Send CI or deployment notification
+description: Send a status message through Discord, WhatsApp CallMeBot, or both.
+inputs:
+  message:
+    description: Notification text. Do not include secrets.
+    required: true
+  discord-webhook-url:
+    description: Optional Discord webhook URL.
+    required: false
+    default: ''
+  callmebot-phone:
+    description: Optional CallMeBot WhatsApp phone number, including country code.
+    required: false
+    default: ''
+  callmebot-api-key:
+    description: Optional CallMeBot API key.
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Send notification
+      shell: bash
+      env:
+        NOTIFICATION_MESSAGE: ${{ inputs.message }}
+        DISCORD_WEBHOOK_URL: ${{ inputs.discord-webhook-url }}
+        CALLMEBOT_PHONE: ${{ inputs.callmebot-phone }}
+        CALLMEBOT_API_KEY: ${{ inputs.callmebot-api-key }}
+      run: bash "${{ github.action_path }}/notify.sh"

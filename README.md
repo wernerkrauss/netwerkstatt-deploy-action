@@ -11,6 +11,11 @@ Central home for the netwerkstatt deployment pipeline for Silverstripe projects.
   - `.github/workflows/reusable-silverstripe-vite-deploy.yml` — release deploy for Vite-themed projects whose
     `dist` is built in CI: the CI uploads the Vite output as an artifact, the deploy job merges it into the
     release archive before uploading.
+  - `.github/actions/notify/` — composite action for deployment notifications (Discord webhook and/or
+    CallMeBot). Call it from the project's `deploy.yml` with `uses: wernerkrauss/netwerkstatt-deploy-action/.github/actions/notify@v1.3.0`
+    and pass `discord-webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}` — secrets are resolved in the **calling**
+    repository's context. Prefer an organization-level secret so all projects share one webhook; never commit
+    webhook URLs to this repository.
   Targets, credentials, and secrets come from the calling repository's GitHub Environment, never from this repo.
 - **Legacy composite action (`action.yml`, tag `v0.1`):** the older single-action variant (composer install,
   tests, optional npm frontend build, Deployer deploy from a server-side clone, Discord/Signal alerts).
@@ -106,6 +111,8 @@ optional `DEPLOY_PORT` and `DEPLOY_COMPOSER_COMMAND`, and the secrets `DEPLOYER_
 - `v1.2.0` — action dependency updates: `actions/checkout@v7`, `actions/setup-node@v7`,
   `actions/upload-artifact@v7`, `actions/download-artifact@v8`, `ramsey/composer-install@4.0.0`.
   `shivammathur/setup-php@v2` and `deployphp/action` v1.0.26 (SHA-pinned) are already current.
+- `v1.3.0` — adds the shared `notify` composite action under `.github/actions/notify/` for Discord/CallMeBot
+  deployment alerts. Notification secrets stay in the calling repo (ideally as organization secrets).
   Breaking changes get a new major tag; projects bump their pin deliberately.
 
 ## Important notes
